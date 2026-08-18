@@ -16,10 +16,12 @@ const path = require('path');
 
 const PORT = Number(process.env.PORT) || 3000;
 const SESSION_DIR = process.env.SESSION_DIR || path.join(__dirname, 'session');
+const DATA_DIR = path.join(__dirname, 'data');
+const MODE_FILE = path.join(DATA_DIR, 'mode.json');
 const PREFIX = '.';
 const WEB_DISABLED = /^(0|false|off|no)$/i.test(String(process.env.WEB || 'true'));
 const MAX_RECONNECT = Number(process.env.MAX_RECONNECT || 3);
-const MAX_PAIR_TRIES = Number(process.env.MAX_PAIR_TRIES || 3);
+const REACT_EMOJI = process.env.REACT_EMOJI || '⚡';
 
 const app = express();
 app.use(express.json());
@@ -34,9 +36,66 @@ let pairingInProgress = false;
 let startPromise = null;
 let terminalPromptStarted = false;
 let reconnectTries = 0;
-let pairTries = 0;
 let gaveUp = false;
-let pairTimer = null;
+let greetSent = false;
+
+function loadMode() {
+  try {
+    const j = JSON.parse(fs.readFileSync(MODE_FILE, 'utf8'));
+    if (j.mode === 'private' || j.mode === 'public') return j.mode;
+  } catch {}
+  return 'public';
+}
+
+function saveMode(mode) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(MODE_FILE, JSON.stringify({ mode }, null, 2));
+}
+
+let botMode = loadMode();
+
+function envPhone() {
+  return String(process.env.PHONE_NUMBER || process.env.NUMBER || '').replace(/\D/g, '');
+}
+
+function ownerJids() {
+  const ids = new Set();
+  const phone = envPhone();
+  if (phone) {
+    ids.add(phone);
+    ids.add(phone + '@s.whatsapp.net');
+  }
+  if (sock?.user?.id) {
+    const raw = sock.user.id;
+    ids.add(raw);
+    ids.add(raw.split(':')[0]);
+    ids.add(raw.split(':')[0] + '@s.whatsapp.net');
+  }
+  if (sock?.user?.lid) {
+    ids.add(String(sock.user.lid));
+    ids.add(String(sock.user.lid).split(':')[0]);
+  }
+  if (connectedNumber) {
+    ids.add(connectedNumber);
+    ids.add(connectedNumber + '@s.whatsapp.net');
+  }
+  return ids;
+}
+
+function senderId(msg) {
+  if (msg.key.participant) return msg.key.participant;
+  return msg.key.remoteJid;
+}
+
+function isOwner(msg) {
+  const sender = String(senderId(msg) || '');
+  const digits = sender.replace(/\D/g, '');
+  const owners = ownerJids();
+  if (owners.has(sender) || owners.has(sender.split(':')[0])) return true;
+  const phone = envPhone();
+  if (phone && (digits === phone || digits.endsWith(phone) || phone.endsWith(digits))) return true;
+  return false;
+}
 
 function htmlPage() {
   const statusColor =
@@ -51,113 +110,13 @@ function htmlPage() {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>WhatsApp Bot — Pair</title>
-  <style>
-    :root { color-scheme: dark; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; min-height: 100vh;
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
-      background: radial-gradient(1200px 600px at 10% -10%, #1e3a2f 0%, transparent 50%),
-                  radial-gradient(900px 500px at 110% 10%, #16324a 0%, transparent 45%),
-                  #0b1220;
-      color: #e8eef7;
-      display: flex; align-items: center; justify-content: center;
-      padding: 24px;
-    }
-    .card {
-      width: 100%; max-width: 440px;
-      background: rgba(15, 23, 42, 0.85);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 20px;
-      padding: 28px;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.45);
-    }
-    h1 { margin: 0 0 6px; font-size: 1.4rem; }
-    p.sub { margin: 0 0 20px; color: #94a3b8; font-size: 0.92rem; }
-    .status {
-      display: flex; align-items: center; gap: 8px;
-      margin-bottom: 20px; font-size: 0.9rem; color: #cbd5e1;
-    }
-    .dot { width: 10px; height: 10px; border-radius: 50%; background: ${statusColor}; box-shadow: 0 0 10px ${statusColor}; }
-    label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 6px; }
-    input {
-      width: 100%; padding: 12px 14px; border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.1);
-      background: #0f172a; color: #fff; font-size: 1rem; outline: none;
-    }
-    input:focus { border-color: #34d399; }
-    button {
-      width: 100%; margin-top: 12px; padding: 12px 14px;
-      border: 0; border-radius: 12px; cursor: pointer;
-      background: #10b981; color: #042f24; font-weight: 700; font-size: 1rem;
-    }
-    button:disabled { opacity: 0.55; cursor: not-allowed; }
-    .code {
-      margin-top: 18px; text-align: center;
-      font-size: 2rem; letter-spacing: 0.28em; font-weight: 800;
-      color: #34d399;
-    }
-    .hint { margin-top: 10px; color: #94a3b8; font-size: 0.82rem; line-height: 1.45; }
-    .err { color: #fca5a5; margin-top: 10px; font-size: 0.85rem; }
-    img { display: block; margin: 16px auto 0; width: 200px; height: 200px; background: #fff; border-radius: 12px; }
-  </style>
+  <title>NOVA ABSOLUTE</title>
 </head>
-<body>
-  <div class="card">
-    <h1>WhatsApp Bot</h1>
-    <p class="sub">Web pair · only command is <b>.ping</b></p>
-    <div class="status"><span class="dot"></span><span id="st">${escapeHtml(connectionStatus)}${connectedNumber ? ' · ' + escapeHtml(connectedNumber) : ''}</span></div>
-    ${
-      connectionStatus === 'connected'
-        ? `<p class="hint">Bot is online. Send <b>.ping</b> in any chat. Session is saved in the <code>session</code> folder — keep that folder if you redeploy.</p>
-           <form method="POST" action="/logout"><button type="submit">Logout / re-pair</button></form>`
-        : `<form id="pairForm">
-             <label for="phone">Phone number (country code, no +)</label>
-             <input id="phone" name="phone" placeholder="2348012345678" inputmode="numeric" required />
-             <button type="submit" id="btn">Get pairing code</button>
-           </form>
-           <div id="out"></div>
-           ${lastQrDataUrl ? `<img alt="QR" src="${lastQrDataUrl}" />` : ''}`
-    }
-  </div>
-  <script>
-    const form = document.getElementById('pairForm');
-    if (form) {
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const btn = document.getElementById('btn');
-        const out = document.getElementById('out');
-        btn.disabled = true;
-        btn.textContent = 'Requesting…';
-        out.innerHTML = '';
-        try {
-          const phone = document.getElementById('phone').value.replace(/\\D/g, '');
-          const res = await fetch('/pair', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone })
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || 'Failed');
-          out.innerHTML = '<div class="code">' + data.code + '</div>'
-            + '<p class="hint">WhatsApp → Linked devices → Link a device → Link with phone number. Enter this code. Page refreshes when connected.</p>';
-        } catch (err) {
-          out.innerHTML = '<p class="err">' + err.message + '</p>';
-        } finally {
-          btn.disabled = false;
-          btn.textContent = 'Get pairing code';
-        }
-      });
-    }
-    setInterval(async () => {
-      try {
-        const r = await fetch('/status');
-        const s = await r.json();
-        if (s.status === 'connected' && ${JSON.stringify(connectionStatus)} !== 'connected') location.reload();
-      } catch {}
-    }, 3000);
-  </script>
+<body style="font-family:sans-serif;background:#0b1220;color:#e8eef7;padding:24px">
+  <h1>NOVA ABSOLUTE</h1>
+  <p>Status: ${escapeHtml(connectionStatus)} ${connectedNumber ? '· ' + escapeHtml(connectedNumber) : ''}</p>
+  <p>Mode: ${escapeHtml(botMode)}</p>
+  <p>Web pair is optional. Type <b>pair</b> in the panel console.</p>
 </body>
 </html>`;
 }
@@ -169,61 +128,18 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;');
 }
 
-app.get('/', (_req, res) => {
-  res.type('html').send(htmlPage());
-});
-
+app.get('/', (_req, res) => res.type('html').send(htmlPage()));
 app.get('/status', (_req, res) => {
-  res.json({
-    status: connectionStatus,
-    number: connectedNumber,
-    hasPairingCode: Boolean(pairingCode),
-    pairingCode,
-  });
+  res.json({ status: connectionStatus, number: connectedNumber, mode: botMode, pairingCode });
 });
 
 app.post('/pair', async (req, res) => {
   try {
-    const phone = String(req.body.phone || '').replace(/\D/g, '');
-    if (phone.length < 8) {
-      return res.status(400).json({ error: 'Enter a valid number with country code, e.g. 2348012345678' });
-    }
-    if (connectionStatus === 'connected') {
-      return res.status(400).json({ error: 'Already connected. Logout first.' });
-    }
-
-    await ensureSocket();
-
-    if (!sock || sock.authState.creds.registered) {
-      return res.status(400).json({ error: 'Session already registered. Use logout if you need a new pair.' });
-    }
-
-    const formatted = await requestPairing(phone);
+    const phone = String(req.body.phone || envPhone() || '').replace(/\D/g, '');
+    const formatted = await requestPairing(phone, { force: true });
     res.json({ code: formatted });
   } catch (err) {
-    console.error('pair error', err);
     res.status(500).json({ error: err.message || 'Could not request pairing code' });
-  }
-});
-
-app.post('/logout', async (_req, res) => {
-  try {
-    if (sock) {
-      try { await sock.logout(); } catch {}
-    }
-    sock = null;
-    pairingCode = null;
-    lastQrDataUrl = null;
-    connectionStatus = 'offline';
-    connectedNumber = null;
-    if (fs.existsSync(SESSION_DIR)) {
-      fs.rmSync(SESSION_DIR, { recursive: true, force: true });
-    }
-    startPromise = null;
-    ensureSocket().catch(() => {});
-    res.redirect('/');
-  } catch (err) {
-    res.status(500).send(String(err.message));
   }
 });
 
@@ -234,6 +150,19 @@ async function ensureSocket() {
     startPromise = null;
   });
   return startPromise;
+}
+
+function isRestartRequired(statusCode, err) {
+  const msg = String(err?.message || err || '').toLowerCase();
+  return (
+    statusCode === DisconnectReason.restartRequired ||
+    statusCode === 515 ||
+    statusCode === 503 ||
+    msg.includes('restart required') ||
+    msg.includes('statuscode=503') ||
+    msg.includes('status code 503') ||
+    msg.includes('service unavailable')
+  );
 }
 
 async function startBot() {
@@ -250,6 +179,9 @@ async function startBot() {
     auth: state,
     browser: Browsers.ubuntu('Chrome'),
     markOnlineOnConnect: false,
+    connectTimeoutMs: 60_000,
+    defaultQueryTimeoutMs: 60_000,
+    keepAliveIntervalMs: 15_000,
   });
 
   sock.ev.on('creds.update', saveCreds);
@@ -268,44 +200,48 @@ async function startBot() {
       pairingCode = null;
       lastQrDataUrl = null;
       reconnectTries = 0;
-      pairTries = 0;
       gaveUp = false;
-      if (pairTimer) clearTimeout(pairTimer);
-      connectedNumber = sock.user?.id?.split(':')[0] || null;
-      console.log('Connected as', connectedNumber);
+      connectedNumber = sock.user?.id?.split(':')[0] || envPhone() || null;
+      console.log('Connected as', connectedNumber, '| mode:', botMode);
+      if (!greetSent) {
+        greetSent = true;
+        setTimeout(() => sendConnectedDm().catch((e) => console.error('greet failed', e.message)), 3000);
+      }
     }
 
     if (connection === 'close') {
       const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
       const loggedOut = statusCode === DisconnectReason.loggedOut;
+      const restartNeeded = isRestartRequired(statusCode, lastDisconnect?.error);
       const reason = lastDisconnect?.error?.message || statusCode || 'unknown';
-      console.log('Connection closed:', reason, loggedOut ? '(logged out from phone)' : '');
+      console.log('Connection closed:', reason, loggedOut ? '(logged out)' : restartNeeded ? '(503 / restart required)' : '');
       sock = null;
       connectionStatus = 'offline';
-      connectedNumber = null;
       pairingInProgress = false;
       startPromise = null;
 
       if (loggedOut) {
         pairingCode = null;
-        pairTries = 0;
         reconnectTries = 0;
-        console.log('Session invalidated. Clearing session and requesting a new pairing code…');
+        greetSent = false;
+        console.log('Logged out. Session cleared. Type "pair" in the console when you want a new code.');
         try {
           if (fs.existsSync(SESSION_DIR)) fs.rmSync(SESSION_DIR, { recursive: true, force: true });
         } catch {}
-        setTimeout(() => {
-          ensureSocket()
-            .then(() => requestPairing(envPhone(), { force: true }))
-            .catch((err) => console.error('Re-pair after logout failed:', err.message));
-        }, 1500);
+        setTimeout(() => ensureSocket().catch(console.error), 1500);
+        return;
+      }
+
+      if (restartNeeded) {
+        console.log('WhatsApp asked for a restart (503 / 515). Reconnecting now — not counting as a failed try.');
+        setTimeout(() => ensureSocket().catch(console.error), 1500);
         return;
       }
 
       reconnectTries += 1;
       if (reconnectTries > MAX_RECONNECT) {
         gaveUp = true;
-        console.error(`Gave up after ${MAX_RECONNECT} reconnect tries. Press Restart on the panel to try again.`);
+        console.error(`Gave up after ${MAX_RECONNECT} reconnect tries. Press Restart on the panel.`);
         return;
       }
       const wait = 2000 * reconnectTries;
@@ -314,48 +250,86 @@ async function startBot() {
     }
   });
 
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
-    const msg = messages[0];
-    if (!msg?.message || msg.key.fromMe) return;
+  sock.ev.on('messages.upsert', async ({ messages }) => {
+    try {
+      const msg = messages?.[0];
+      if (!msg?.message || msg.key.fromMe || msg.key.remoteJid === 'status@broadcast') return;
 
-    const text =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      msg.message.imageMessage?.caption ||
-      '';
+      const text =
+        msg.message.conversation ||
+        msg.message.extendedTextMessage?.text ||
+        msg.message.imageMessage?.caption ||
+        msg.message.videoMessage?.caption ||
+        '';
 
-    const body = String(text).trim();
-    if (!body.toLowerCase().startsWith(PREFIX + 'ping')) return;
+      const body = String(text).trim();
+      if (!body.startsWith(PREFIX)) return;
 
-    const start = Date.now();
-    await sock.sendMessage(msg.key.remoteJid, { text: 'pong' }, { quoted: msg });
-    const ms = Date.now() - start;
-    console.log(`.ping from ${msg.key.remoteJid} (${ms}ms)`);
+      const [rawCmd, ...rest] = body.slice(PREFIX.length).trim().split(/\s+/);
+      const cmd = (rawCmd || '').toLowerCase();
+      if (!cmd) return;
+
+      if (botMode === 'private' && !isOwner(msg)) return;
+
+      await reactTo(msg);
+
+      if (cmd === 'ping') {
+        const start = Date.now();
+        await reply(msg, 'pong');
+        console.log(`.ping ${Date.now() - start}ms`);
+        return;
+      }
+
+      if (cmd === 'mode') {
+        if (!isOwner(msg)) {
+          await reply(msg, 'Owner only.');
+          return;
+        }
+        const arg = (rest[0] || '').toLowerCase();
+        if (arg === 'private' || arg === 'public') {
+          botMode = arg;
+          saveMode(botMode);
+          await reply(msg, `Mode set to *${botMode}*\nprivate = only you\npublic = everyone`);
+          return;
+        }
+        await reply(msg, `Current mode: *${botMode}*\nUse \`.mode private\` or \`.mode public\``);
+        return;
+      }
+    } catch (err) {
+      console.error('command error:', err.message);
+    }
   });
 
   return sock;
 }
 
-function envPhone() {
-  return String(process.env.PHONE_NUMBER || process.env.NUMBER || '').replace(/\D/g, '');
+async function reactTo(msg) {
+  try {
+    await sock.sendMessage(msg.key.remoteJid, {
+      react: { text: REACT_EMOJI, key: msg.key },
+    });
+  } catch (err) {
+    console.warn('react failed:', err.message);
+  }
 }
 
-function scheduleAnotherCode(phone) {
-  if (pairTimer) clearTimeout(pairTimer);
-  pairTimer = setTimeout(async () => {
-    if (connectionStatus === 'connected') return;
-    if (pairTries >= MAX_PAIR_TRIES) {
-      console.log('Already printed', MAX_PAIR_TRIES, 'pairing codes. Type "pair" in console for another.');
-      return;
-    }
-    console.log('Still not linked — requesting a fresh pairing code…');
-    try {
-      await requestPairing(phone, { force: true });
-    } catch (err) {
-      console.error('Could not get another code:', err.message);
-    }
-  }, 45000);
+async function reply(msg, text) {
+  await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+}
+
+async function sendConnectedDm() {
+  const phone = envPhone();
+  const jid = phone
+    ? phone + '@s.whatsapp.net'
+    : sock.user?.id?.split(':')[0] + '@s.whatsapp.net';
+  const text =
+    'NOVA ABSOLUTE bot is connected ✅\n\n' +
+    `Number: ${phone || connectedNumber || 'unknown'}\n` +
+    `Mode: ${botMode}\n` +
+    'Commands: .ping  ·  .mode public|private\n\n' +
+    'You get na.';
+  await sock.sendMessage(jid, { text });
+  console.log('Sent connect DM to', jid);
 }
 
 async function requestPairing(phoneRaw, { force = false } = {}) {
@@ -368,22 +342,13 @@ async function requestPairing(phoneRaw, { force = false } = {}) {
   if (connectionStatus === 'connected') {
     throw new Error('Already connected.');
   }
-  if (sock.authState.creds.registered && !force) {
-    throw new Error('Session already registered. Delete the session folder to re-pair.');
-  }
-
-  if (pairingInProgress && !force) {
-    await new Promise((r) => setTimeout(r, 1200));
-  }
 
   pairingInProgress = true;
-  pairTries += 1;
   try {
     await new Promise((r) => setTimeout(r, 1500));
     const code = await sock.requestPairingCode(phone);
     pairingCode = String(code).match(/.{1,4}/g)?.join('-') || String(code);
-    printPairingBanner(phone, pairingCode, pairTries);
-    scheduleAnotherCode(phone);
+    printPairingBanner(phone, pairingCode);
     return pairingCode;
   } finally {
     pairingInProgress = false;
@@ -397,31 +362,18 @@ function printPairingBanner(phone, code) {
   console.log('  >>>   ' + code + '   <<<');
   console.log(line);
   console.log('WhatsApp → Linked devices → Link a device');
-  console.log('→ Link with phone number → enter the code\n');
-}
-
-function askTerminal(question) {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(String(answer || '').trim());
-    });
-  });
+  console.log('→ Link with phone number → enter the code');
+  console.log('Need another code? Type: pair\n');
 }
 
 function listenForPairCommand() {
   if (terminalPromptStarted) return;
   terminalPromptStarted = true;
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  console.log('Type "pair" in this console when you want a pairing code. No auto codes.');
   rl.on('line', async (line) => {
     const t = String(line || '').trim().toLowerCase();
-    if (!t) return;
     if (t === 'pair' || t === 'code' || t === 'pairing') {
-      pairTries = Math.min(pairTries, MAX_PAIR_TRIES - 1);
       try {
         await requestPairing(envPhone(), { force: true });
       } catch (err) {
@@ -431,49 +383,22 @@ function listenForPairCommand() {
   });
 }
 
-async function maybeTerminalPair() {
-  listenForPairCommand();
-  await ensureSocket();
-  if (!sock || sock.authState.creds.registered || connectionStatus === 'connected') {
-    return;
-  }
-
-  const fromEnv = envPhone();
-  if (fromEnv.length >= 8) {
-    console.log('Using PHONE_NUMBER from .env …');
-    try {
-      await requestPairing(fromEnv, { force: true });
-    } catch (err) {
-      console.error('Pairing failed:', err.message);
-    }
-    return;
-  }
-
-  console.log('No PHONE_NUMBER in .env. Type: pair');
-}
-
 function startWebOrSkip() {
+  listenForPairCommand();
   if (WEB_DISABLED) {
-    console.log('Web pair disabled (WEB=false). Use console / PHONE_NUMBER.');
-    ensureSocket()
-      .then(() => maybeTerminalPair())
-      .catch((err) => console.error('start error', err));
+    console.log('Web pair disabled (WEB=false). Type pair in the console.');
+    ensureSocket().catch((err) => console.error('start error', err));
     return;
   }
 
   const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Web pair page: http://0.0.0.0:${PORT}`);
-    console.log('If this host has no public site, use the console prompt or PHONE_NUMBER.');
-    ensureSocket()
-      .then(() => maybeTerminalPair())
-      .catch((err) => console.error('start error', err));
+    console.log(`Optional web page: http://0.0.0.0:${PORT}`);
+    ensureSocket().catch((err) => console.error('start error', err));
   });
 
   server.on('error', (err) => {
-    console.warn('Web server failed (' + err.message + '). Falling back to terminal pairing.');
-    ensureSocket()
-      .then(() => maybeTerminalPair())
-      .catch((e) => console.error('start error', e));
+    console.warn('Web server failed (' + err.message + '). Console pair still works.');
+    ensureSocket().catch((e) => console.error('start error', e));
   });
 }
 

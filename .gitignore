@@ -2,3 +2,5 @@ node_modules/
 session/
 .arena/
 .deploy-sha
+.npm/
+data/

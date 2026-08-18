@@ -84,11 +84,24 @@ KataBump startup command should be `npm start` (not `node index.js`).
 | `PHONE_NUMBER`  | (empty)     | Auto-print pairing code (country code, no +) |
 | `SESSION_DIR`   | `./session` | Login files                                  |
 
-## Command
+## Commands
 
-| Command | What it does   |
-|---------|----------------|
-| `.ping` | Replies `pong` |
+| Command | Who | What |
+|---------|-----|------|
+| `.ping` | public / owner | Reacts ⚡ then replies `pong` |
+| `.mode` | owner | Shows current mode |
+| `.mode public` | owner | Bot replies to everyone |
+| `.mode private` | owner | Bot only replies to the paired number |
+
+Every `.command` gets a reaction first, then the reply.
+
+3 seconds after connect, the bot DMs you: **NOVA ABSOLUTE bot is connected**.
+
+Pairing codes are **not** auto-printed. Type `pair` in the panel console.
+
+**Baileys:** `@whiskeysockets/baileys` **6.7.24** (range `^6.7.18` in package.json).
+
+503 / “restart required” (515) reconnects immediately and does **not** burn a retry. Other drops: 3 tries then stop.
 
 ## Free hosting (I can’t host it for you)
 
