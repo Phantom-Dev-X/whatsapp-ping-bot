@@ -39,6 +39,17 @@ If the host has no site at all:
 WEB=false
 ```
 
+## Spaceify / any Pterodactyl panel
+
+1. Create a **Node 18/20** server on [client.spaceify.eu](https://client.spaceify.eu).
+2. Startup: `npm start`
+3. Clone once: `git clone https://github.com/Phantom-Dev-X/whatsapp-ping-bot.git .`
+4. Start. Console prints a pairing code for `2348147051558` (`WEB=false` in `.env`).
+5. Need another code: type `pair` in the console.
+6. **Restart** on the panel pulls the latest GitHub commit first.
+
+Baileys: **`@whiskeysockets/baileys`** (WhatsApp Web multi-device). Not the official WhatsApp Business API.
+
 ## Auto-deploy from GitHub
 
 `npm start` runs `start.js`, which:
