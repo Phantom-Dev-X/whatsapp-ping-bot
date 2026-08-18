@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { checkAndUpdate, startWatcher } = require('./auto-deploy');
 
 (async () => {

@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const pino = require('pino');
 const qrcode = require('qrcode');
@@ -17,6 +18,8 @@ const PORT = Number(process.env.PORT) || 3000;
 const SESSION_DIR = process.env.SESSION_DIR || path.join(__dirname, 'session');
 const PREFIX = '.';
 const WEB_DISABLED = /^(0|false|off|no)$/i.test(String(process.env.WEB || 'true'));
+const MAX_RECONNECT = Number(process.env.MAX_RECONNECT || 3);
+const MAX_PAIR_TRIES = Number(process.env.MAX_PAIR_TRIES || 3);
 
 const app = express();
 app.use(express.json());
@@ -30,6 +33,10 @@ let connectedNumber = null;
 let pairingInProgress = false;
 let startPromise = null;
 let terminalPromptStarted = false;
+let reconnectTries = 0;
+let pairTries = 0;
+let gaveUp = false;
+let pairTimer = null;
 
 function htmlPage() {
   const statusColor =
@@ -260,22 +267,50 @@ async function startBot() {
       connectionStatus = 'connected';
       pairingCode = null;
       lastQrDataUrl = null;
+      reconnectTries = 0;
+      pairTries = 0;
+      gaveUp = false;
+      if (pairTimer) clearTimeout(pairTimer);
       connectedNumber = sock.user?.id?.split(':')[0] || null;
       console.log('Connected as', connectedNumber);
     }
 
     if (connection === 'close') {
-      const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
-      const loggedOut = code === DisconnectReason.loggedOut;
-      console.log('Connection closed', code, loggedOut ? '(logged out)' : '');
+      const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
+      const loggedOut = statusCode === DisconnectReason.loggedOut;
+      const reason = lastDisconnect?.error?.message || statusCode || 'unknown';
+      console.log('Connection closed:', reason, loggedOut ? '(logged out from phone)' : '');
       sock = null;
       connectionStatus = 'offline';
       connectedNumber = null;
-      if (!loggedOut) {
-        setTimeout(() => ensureSocket().catch(console.error), 2000);
-      } else {
+      pairingInProgress = false;
+      startPromise = null;
+
+      if (loggedOut) {
         pairingCode = null;
+        pairTries = 0;
+        reconnectTries = 0;
+        console.log('Session invalidated. Clearing session and requesting a new pairing code…');
+        try {
+          if (fs.existsSync(SESSION_DIR)) fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+        } catch {}
+        setTimeout(() => {
+          ensureSocket()
+            .then(() => requestPairing(envPhone(), { force: true }))
+            .catch((err) => console.error('Re-pair after logout failed:', err.message));
+        }, 1500);
+        return;
       }
+
+      reconnectTries += 1;
+      if (reconnectTries > MAX_RECONNECT) {
+        gaveUp = true;
+        console.error(`Gave up after ${MAX_RECONNECT} reconnect tries. Press Restart on the panel to try again.`);
+        return;
+      }
+      const wait = 2000 * reconnectTries;
+      console.log(`Reconnect ${reconnectTries}/${MAX_RECONNECT} in ${wait / 1000}s…`);
+      setTimeout(() => ensureSocket().catch(console.error), wait);
     }
   });
 
@@ -302,21 +337,57 @@ async function startBot() {
   return sock;
 }
 
-async function requestPairing(phoneRaw) {
-  const phone = String(phoneRaw || '').replace(/\D/g, '');
+function envPhone() {
+  return String(process.env.PHONE_NUMBER || process.env.NUMBER || '').replace(/\D/g, '');
+}
+
+function scheduleAnotherCode(phone) {
+  if (pairTimer) clearTimeout(pairTimer);
+  pairTimer = setTimeout(async () => {
+    if (connectionStatus === 'connected') return;
+    if (pairTries >= MAX_PAIR_TRIES) {
+      console.log('Already printed', MAX_PAIR_TRIES, 'pairing codes. Type "pair" in console for another.');
+      return;
+    }
+    console.log('Still not linked — requesting a fresh pairing code…');
+    try {
+      await requestPairing(phone, { force: true });
+    } catch (err) {
+      console.error('Could not get another code:', err.message);
+    }
+  }, 45000);
+}
+
+async function requestPairing(phoneRaw, { force = false } = {}) {
+  const phone = String(phoneRaw || envPhone() || '').replace(/\D/g, '');
   if (phone.length < 8) {
-    throw new Error('Enter a valid number with country code, e.g. 234909383837');
+    throw new Error('Enter a valid number with country code, e.g. 2348147051558');
   }
   await ensureSocket();
   if (!sock) throw new Error('Socket not ready, try again');
-  if (sock.authState.creds.registered) {
+  if (connectionStatus === 'connected') {
+    throw new Error('Already connected.');
+  }
+  if (sock.authState.creds.registered && !force) {
     throw new Error('Session already registered. Delete the session folder to re-pair.');
   }
+
+  if (pairingInProgress && !force) {
+    await new Promise((r) => setTimeout(r, 1200));
+  }
+
   pairingInProgress = true;
-  const code = await sock.requestPairingCode(phone);
-  pairingCode = String(code).match(/.{1,4}/g)?.join('-') || String(code);
-  printPairingBanner(phone, pairingCode);
-  return pairingCode;
+  pairTries += 1;
+  try {
+    await new Promise((r) => setTimeout(r, 1500));
+    const code = await sock.requestPairingCode(phone);
+    pairingCode = String(code).match(/.{1,4}/g)?.join('-') || String(code);
+    printPairingBanner(phone, pairingCode, pairTries);
+    scheduleAnotherCode(phone);
+    return pairingCode;
+  } finally {
+    pairingInProgress = false;
+  }
 }
 
 function printPairingBanner(phone, code) {
@@ -342,39 +413,43 @@ function askTerminal(question) {
   });
 }
 
-async function maybeTerminalPair() {
+function listenForPairCommand() {
   if (terminalPromptStarted) return;
   terminalPromptStarted = true;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  rl.on('line', async (line) => {
+    const t = String(line || '').trim().toLowerCase();
+    if (!t) return;
+    if (t === 'pair' || t === 'code' || t === 'pairing') {
+      pairTries = Math.min(pairTries, MAX_PAIR_TRIES - 1);
+      try {
+        await requestPairing(envPhone(), { force: true });
+      } catch (err) {
+        console.error('Pairing failed:', err.message);
+      }
+    }
+  });
+}
 
+async function maybeTerminalPair() {
+  listenForPairCommand();
   await ensureSocket();
   if (!sock || sock.authState.creds.registered || connectionStatus === 'connected') {
     return;
   }
 
-  const fromEnv = String(process.env.PHONE_NUMBER || process.env.NUMBER || '').replace(/\D/g, '');
+  const fromEnv = envPhone();
   if (fromEnv.length >= 8) {
-    console.log('Using PHONE_NUMBER from environment…');
+    console.log('Using PHONE_NUMBER from .env …');
     try {
-      await requestPairing(fromEnv);
+      await requestPairing(fromEnv, { force: true });
     } catch (err) {
       console.error('Pairing failed:', err.message);
     }
     return;
   }
 
-  console.log('');
-  console.log('No website? Pair from this console.');
-  console.log('Type your number with country code (example: 234909383837) then press Enter.');
-  try {
-    const phone = await askTerminal('Phone number: ');
-    if (!phone) {
-      console.log('No number entered. Set PHONE_NUMBER=234… in env, or open the web pair page.');
-      return;
-    }
-    await requestPairing(phone);
-  } catch (err) {
-    console.error('Pairing failed:', err.message);
-  }
+  console.log('No PHONE_NUMBER in .env. Type: pair');
 }
 
 function startWebOrSkip() {
