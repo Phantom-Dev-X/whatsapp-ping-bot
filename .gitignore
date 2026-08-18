@@ -1,3 +1,5 @@
 node_modules/
 session/
 .arena/
+.deploy-sha
+.env

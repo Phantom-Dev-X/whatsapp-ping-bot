@@ -39,6 +39,26 @@ If the host has no site at all:
 WEB=false
 ```
 
+## Auto-deploy from GitHub
+
+`npm start` runs `start.js`, which:
+
+1. Checks `Phantom-Dev-X/whatsapp-ping-bot` on GitHub
+2. If there is a new commit, downloads it, runs `npm install`, keeps `session/`
+3. Restarts (the panel brings the process back up)
+4. Repeats every **3 minutes**
+
+Env:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `AUTO_DEPLOY` | `true` | Set `false` to turn this off |
+| `GITHUB_REPO` | `Phantom-Dev-X/whatsapp-ping-bot` | `owner/name` |
+| `GITHUB_BRANCH` | `main` | Branch to track |
+| `DEPLOY_INTERVAL_MS` | `180000` | How often to poll |
+
+KataBump startup command should be `npm start` (not `node index.js`).
+
 ## Panel deploy
 
 1. Upload these files.
