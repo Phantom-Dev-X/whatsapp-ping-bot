@@ -1,0 +1,77 @@
+# WhatsApp Bot (web pair + console pair + `.ping`)
+
+Node.js bot using Baileys. Pair from a **browser** or from the **panel console** if the host has no website.
+
+## Pair — two ways
+
+### 1) Website (if the panel gives you a port / domain)
+
+Open the site → enter `234909383837` → use the code in WhatsApp.
+
+### 2) Terminal (no website)
+
+On start the bot asks:
+
+```
+Phone number: 234909383837
+```
+
+It then prints:
+
+```
+==========================================
+  PAIRING CODE FOR 234909383837
+  >>>   ABCD-EFGH   <<<
+==========================================
+```
+
+WhatsApp → **Linked devices** → **Link a device** → **Link with phone number**.
+
+Or skip the prompt and set env:
+
+```
+PHONE_NUMBER=234909383837
+```
+
+If the host has no site at all:
+
+```
+WEB=false
+```
+
+## Panel deploy
+
+1. Upload these files.
+2. Startup: `npm start` (Node 18+).
+3. `npm install` if the panel does not do it.
+4. Keep the `session/` folder after first pair.
+
+| Variable        | Default     | Meaning                                      |
+|-----------------|-------------|----------------------------------------------|
+| `PORT`          | `3000`      | Web pair page                                |
+| `WEB`           | `true`      | Set `false` to skip the website              |
+| `PHONE_NUMBER`  | (empty)     | Auto-print pairing code (country code, no +) |
+| `SESSION_DIR`   | `./session` | Login files                                  |
+
+## Command
+
+| Command | What it does   |
+|---------|----------------|
+| `.ping` | Replies `pong` |
+
+## Free hosting (I can’t host it for you)
+
+This bot needs a **process that stays online** (WhatsApp Web socket). Sleepy free web hosts will drop the session.
+
+Realistic free-ish options:
+
+| Place | Notes |
+|-------|--------|
+| **Oracle Cloud “Always Free” VM** | Best long-term free: small Ubuntu VPS, 24/7. Needs a card to sign up. |
+| **Koyeb free nano** | Often used for WA bots; no sleep on the free instance (limits apply). |
+| **Render free** | Easy, but **sleeps** when idle — bad for WhatsApp. |
+| **Railway** | Nice UX; free credit is usually a **trial**, then pay. |
+| **Free Pterodactyl bot panels** (Katabump, Bot-Hosting, similar) | Good fit: console + files. RAM is tight; this bot is small. |
+| **Your PC / Termux** | Always works; phone must stay on if Termux. |
+
+I can’t run the bot on Arena 24/7 for you. Use a VPS or a bot panel, pair once, and don’t delete `session/`.
