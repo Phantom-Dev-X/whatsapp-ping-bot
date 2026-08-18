@@ -143,6 +143,17 @@ app.post('/pair', async (req, res) => {
   }
 });
 
+function wipeSession(why) {
+  try {
+    if (fs.existsSync(SESSION_DIR)) {
+      fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+      console.log('Deleted session (' + why + ')');
+    }
+  } catch (err) {
+    console.error('Could not delete session:', err.message);
+  }
+}
+
 async function ensureSocket() {
   if (sock) return sock;
   if (startPromise) return startPromise;

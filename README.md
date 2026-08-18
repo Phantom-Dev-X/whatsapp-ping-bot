@@ -99,7 +99,7 @@ Every `.command` gets a reaction first, then the reply.
 
 Pairing codes are **not** auto-printed. Type `pair` in the panel console.
 
-**Baileys:** `@whiskeysockets/baileys` **6.7.24** (range `^6.7.18` in package.json).
+**Baileys:** `@whiskeysockets/baileys` **7.0.0-rc14** (latest WhiskeySockets).
 
 503 / “restart required” (515) reconnects immediately and does **not** burn a retry. Other drops: 3 tries then stop.
 

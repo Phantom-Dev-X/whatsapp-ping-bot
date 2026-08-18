@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
-    "@whiskeysockets/baileys": "6.7.24",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
     "adm-zip": "^0.5.16",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
